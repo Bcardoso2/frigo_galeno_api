@@ -322,49 +322,68 @@ const listarVendas = async (req, res) => {
 // @access  Privado
 const getResumoDiario = async (req, res) => {
   try {
+    // Obter a data de hoje no formato compatível com MySQL
     const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
+    const dataHoje = hoje.toISOString().split('T')[0]; // Formato YYYY-MM-DD
     
-    const amanha = new Date(hoje);
-    amanha.setDate(amanha.getDate() + 1);
+    console.log('Buscando resumo para a data:', dataHoje);
     
+    // Consulta principal - usando a estrutura real da tabela
     const [vendas] = await pool.query(`
       SELECT v.*, vi.quantidade_kg, vi.preco_kg, vi.valor_total as item_valor_total,
              p.nome as produto_nome
       FROM vendas v
       JOIN venda_itens vi ON v.id = vi.venda_id
       JOIN produtos p ON vi.produto_id = p.id
-      WHERE v.createdAt >= ? AND v.createdAt < ? AND v.cancelada = FALSE
-    `, [hoje, amanha]);
+      WHERE DATE(v.data_hora) = ? AND v.finalizada = 1
+    `, [dataHoje]);
+    
+    console.log(`Encontradas ${vendas.length} vendas para hoje`);
+    
+    // Caso não haja vendas hoje
+    if (vendas.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          data: dataHoje,
+          totalVendas: 0,
+          totalValor: 0,
+          totalQuantidade: 0,
+          ticketMedio: 0,
+          valorMedioKg: 0,
+          porFormaPagamento: {},
+          topProdutos: []
+        }
+      });
+    }
     
     // Calcular totais
     const totalVendas = vendas.length;
-    const totalValor = vendas.reduce((acc, venda) => acc + venda.valor_total, 0);
+    const totalValor = vendas.reduce((acc, venda) => {
+      return acc + parseFloat(venda.valor_total || 0);
+    }, 0);
     
     // Calcular quantidade total de kg vendidos
     let totalQuantidade = 0;
     const produtosVendidos = {};
     
     vendas.forEach(venda => {
-      const item = {
-        quantidade_kg: venda.quantidade_kg,
-        valor_total: venda.item_valor_total,
-        produto_nome: venda.produto_nome
-      };
+      const quantidadeKg = parseFloat(venda.quantidade_kg || 0);
+      const valorItem = parseFloat(venda.item_valor_total || 0);
+      const produtoNome = venda.produto_nome || 'Produto desconhecido';
       
-      totalQuantidade += item.quantidade_kg;
+      totalQuantidade += quantidadeKg;
       
-      const produtoId = item.produto_nome;
-      if (!produtosVendidos[produtoId]) {
-        produtosVendidos[produtoId] = {
-          nome: item.produto_nome,
+      if (!produtosVendidos[produtoNome]) {
+        produtosVendidos[produtoNome] = {
+          nome: produtoNome,
           quantidade: 0,
           valor: 0
         };
       }
       
-      produtosVendidos[produtoId].quantidade += item.quantidade_kg;
-      produtosVendidos[produtoId].valor += item.valor_total;
+      produtosVendidos[produtoNome].quantidade += quantidadeKg;
+      produtosVendidos[produtoNome].valor += valorItem;
     });
     
     // Calcular métricas
@@ -375,12 +394,12 @@ const getResumoDiario = async (req, res) => {
     const [pagamentos] = await pool.query(`
       SELECT forma_pagamento, SUM(valor_total) as total
       FROM vendas
-      WHERE createdAt >= ? AND createdAt < ? AND cancelada = FALSE
+      WHERE DATE(data_hora) = ? AND finalizada = 1
       GROUP BY forma_pagamento
-    `, [hoje, amanha]);
+    `, [dataHoje]);
     
     const porFormaPagamento = pagamentos.reduce((acc, pagamento) => {
-      acc[pagamento.forma_pagamento] = pagamento.total;
+      acc[pagamento.forma_pagamento] = parseFloat(pagamento.total || 0);
       return acc;
     }, {});
     
@@ -392,7 +411,7 @@ const getResumoDiario = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        data: hoje,
+        data: dataHoje,
         totalVendas,
         totalValor,
         totalQuantidade,
@@ -403,10 +422,13 @@ const getResumoDiario = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Erro ao buscar resumo diário:', error);
+    console.error('Erro detalhado ao buscar resumo diário:', error);
+    
+    // Fornecer mais detalhes sobre o erro para depuração
     res.status(500).json({
       success: false,
-      message: 'Erro ao buscar resumo diário'
+      message: 'Erro ao buscar resumo diário',
+      error: error.message
     });
   }
 };
