@@ -266,6 +266,9 @@ const registrarVendaCompleta = async (req, res) => {
 // @desc    Listar vendas com filtro de data opcional
 // @route   GET /api/vendas
 // @access  Privado
+// @desc    Listar vendas com filtro de data opcional
+// @route   GET /api/vendas
+// @access  Privado
 const listarVendas = async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
@@ -285,13 +288,13 @@ const listarVendas = async (req, res) => {
     let queryParams = [];
 
     if (data_inicio && data_fim) {
-      whereConditions.push('v.createdAt BETWEEN ? AND ?');
+      whereConditions.push('v.data_hora BETWEEN ? AND ?');
       queryParams.push(new Date(data_inicio), new Date(data_fim));
     } else if (data_inicio) {
-      whereConditions.push('v.createdAt >= ?');
+      whereConditions.push('v.data_hora >= ?');
       queryParams.push(new Date(data_inicio));
     } else if (data_fim) {
-      whereConditions.push('v.createdAt <= ?');
+      whereConditions.push('v.data_hora <= ?');
       queryParams.push(new Date(data_fim));
     }
 
@@ -299,7 +302,7 @@ const listarVendas = async (req, res) => {
       queryString += ' WHERE ' + whereConditions.join(' AND ');
     }
 
-    queryString += ' ORDER BY v.createdAt DESC';
+    queryString += ' ORDER BY v.data_hora DESC';
 
     const [vendas] = await pool.query(queryString, queryParams);
 
@@ -312,11 +315,11 @@ const listarVendas = async (req, res) => {
     console.error('Erro ao listar vendas:', error);
     res.status(500).json({
       success: false,
-      message: 'Erro ao listar vendas'
+      message: 'Erro ao listar vendas',
+      error: error.message
     });
   }
 };
-
 // @desc    Obter resumo das vendas do dia
 // @route   GET /api/vendas/resumo-dia
 // @access  Privado
