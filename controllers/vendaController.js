@@ -320,15 +320,17 @@ const listarVendas = async (req, res) => {
 // @desc    Obter resumo das vendas do dia
 // @route   GET /api/vendas/resumo-dia
 // @access  Privado
+// @desc    Obter resumo das vendas do dia
+// @route   GET /api/vendas/resumo-dia
+// @access  Privado
 const getResumoDiario = async (req, res) => {
   try {
-    // Obter a data de hoje no formato compatível com MySQL
-    const hoje = new Date();
-    const dataHoje = hoje.toISOString().split('T')[0]; // Formato YYYY-MM-DD
+    // Obter a data de hoje no formato YYYY-MM-DD
+    const dataHoje = new Date().toISOString().split('T')[0]; 
     
     console.log('Buscando resumo para a data:', dataHoje);
     
-    // Consulta principal - usando a estrutura real da tabela
+    // Consulta usando as colunas que realmente existem na sua tabela
     const [vendas] = await pool.query(`
       SELECT v.*, vi.quantidade_kg, vi.preco_kg, vi.valor_total as item_valor_total,
              p.nome as produto_nome
