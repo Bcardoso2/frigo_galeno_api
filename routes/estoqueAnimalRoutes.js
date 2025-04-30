@@ -8,18 +8,17 @@ const {
   atualizarEstoqueAnimal, 
   excluirEstoqueAnimal 
 } = require('../controllers/estoqueAnimalController');
-const { protect, admin } = require('../middleware/authMiddleware');
 
-// Rotas protegidas (requerem autenticação)
+// Rotas abertas temporariamente (sem middleware de autenticação)
 router
   .route('/')
-  .post(protect, admin, adicionarEstoqueAnimal)
-  .get(protect, listarEstoqueAnimal);
+  .post(adicionarEstoqueAnimal)
+  .get(listarEstoqueAnimal);
 
 router
   .route('/:id')
-  .get(protect, getEstoqueAnimalPorId)
-  .put(protect, admin, atualizarEstoqueAnimal)
-  .delete(protect, admin, excluirEstoqueAnimal);
+  .get(getEstoqueAnimalPorId)
+  .put(atualizarEstoqueAnimal)
+  .delete(excluirEstoqueAnimal);
 
 module.exports = router;
