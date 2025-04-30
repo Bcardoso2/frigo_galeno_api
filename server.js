@@ -33,12 +33,14 @@ const produtoRoutes = require('./routes/produtoRoutes');
 const estoqueRoutes = require('./routes/estoqueRoutes');
 const vendaRoutes = require('./routes/vendaRoutes');
 const autenticacaoRoutes = require('./routes/autenticacaoRoutes');
+const estoqueAnimalRoutes = require('./routes/estoqueAnimalRoutes');
 
 app.use('/api/usuarios', usuarioRoutes);
 app.use('/api/produtos', produtoRoutes);
 app.use('/api/estoque', estoqueRoutes);
 app.use('/api/vendas', vendaRoutes);
 app.use('/api/auth', autenticacaoRoutes);
+app.use('/api/estoque-animal', estoqueAnimalRoutes);
 
 // Rota para testar se o servidor está rodando
 app.get('/', (req, res) => {
