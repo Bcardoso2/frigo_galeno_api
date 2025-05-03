@@ -3,62 +3,92 @@ const { pool } = require('../config/database');
 // Função auxiliar para baixar estoque animal
 async function baixarEstoqueAnimal(connection, produto_id, quantidade_kg) {
   try {
-    // Verificar se o produto está associado a algum estoque animal
+    // Verificar se o produto está associado a algum tipo de estoque animal
     const [associacoes] = await connection.query(`
-      SELECT pea.*, ea.peso_kg as estoque_atual, ea.parte
+      SELECT pea.*, eat.parte
       FROM produto_estoque_animal pea
-      JOIN estoque_animal ea ON pea.estoque_animal_id = ea.id
+      JOIN estoque_animal_tipo eat ON pea.estoque_animal_tipo_id = eat.id
       WHERE pea.produto_id = ?
     `, [produto_id]);
     
     if (associacoes.length === 0) {
-      console.log(`Produto ${produto_id} não está associado a nenhum estoque animal`);
+      console.log(`Produto ${produto_id} não está associado a nenhum tipo de estoque animal`);
       return false; // Não há associações, continuar normalmente
     }
     
     // Calcular o total de percentual para normalização
     const totalPercentual = associacoes.reduce((total, assoc) => total + parseFloat(assoc.percentual), 0);
     
-    // Baixar estoque proporcional em cada estoque animal associado
+    // Processar cada parte (traseiro/dianteiro) separadamente
+    const partes = {}; // Armazenar quanto deve ser baixado de cada parte
+    
+    // Calcular quanto deve ser baixado de cada parte
     for (const assoc of associacoes) {
-      // Normalizar o percentual caso o total seja diferente de 100%
+      const parte = assoc.parte;
       const percentualNormalizado = (parseFloat(assoc.percentual) / totalPercentual) * 100;
-      
-      // Calcular quantidade a baixar deste estoque específico
       const quantidadeBaixar = (quantidade_kg * percentualNormalizado) / 100;
       
-      console.log(`Baixando ${quantidadeBaixar}kg (${percentualNormalizado}%) do estoque animal ${assoc.estoque_animal_id} (${assoc.parte})`);
+      if (!partes[parte]) {
+        partes[parte] = 0;
+      }
       
-      // Verificar se tem estoque suficiente
-      if (parseFloat(assoc.estoque_atual) < quantidadeBaixar) {
-        console.warn(`Estoque insuficiente no estoque animal ${assoc.estoque_animal_id}. Disponível: ${assoc.estoque_atual}kg, Necessário: ${quantidadeBaixar}kg`);
-        // Continua a operação, baixando o que tem disponível
-        await connection.query(
-          'UPDATE estoque_animal SET peso_kg = 0 WHERE id = ?',
-          [assoc.estoque_animal_id]
-        );
-      } else {
-        // Baixar a quantidade calculada
+      partes[parte] += quantidadeBaixar;
+      console.log(`Calculado: ${quantidadeBaixar}kg (${percentualNormalizado}%) da parte ${parte}`);
+    }
+    
+    // Para cada parte, distribuir a baixa entre todos os registros existentes
+    for (const parte in partes) {
+      const quantidadeTotalBaixar = partes[parte];
+      
+      // Buscar todos os registros de estoque animal desta parte
+      const [registrosEstoque] = await connection.query(`
+        SELECT id, peso_kg
+        FROM estoque_animal
+        WHERE parte = ? AND peso_kg > 0
+        ORDER BY data_entrada ASC
+      `, [parte]);
+      
+      if (registrosEstoque.length === 0) {
+        console.warn(`Não há registros de estoque para a parte ${parte}`);
+        continue;
+      }
+      
+      console.log(`Baixando ${quantidadeTotalBaixar}kg da parte ${parte} distribuído entre ${registrosEstoque.length} registros`);
+      
+      // Verificar se há estoque suficiente no total
+      const estoqueTotal = registrosEstoque.reduce((total, reg) => total + parseFloat(reg.peso_kg), 0);
+      
+      if (estoqueTotal < quantidadeTotalBaixar) {
+        console.warn(`Estoque insuficiente para a parte ${parte}. Disponível: ${estoqueTotal}kg, Necessário: ${quantidadeTotalBaixar}kg`);
+        // Baixar o disponível proporcionalmente
+      }
+      
+      // Abordagem FIFO (First In, First Out) - baixa primeiro dos lotes mais antigos
+      let quantidadeRestante = quantidadeTotalBaixar;
+      
+      for (const registro of registrosEstoque) {
+        if (quantidadeRestante <= 0) break;
+        
+        const pesoRegistro = parseFloat(registro.peso_kg);
+        // Quanto vamos baixar deste registro específico
+        const baixarDesteRegistro = Math.min(pesoRegistro, quantidadeRestante);
+        
+        // Atualizar o registro
         await connection.query(
           'UPDATE estoque_animal SET peso_kg = peso_kg - ? WHERE id = ?',
-          [quantidadeBaixar, assoc.estoque_animal_id]
+          [baixarDesteRegistro, registro.id]
         );
+        
+        console.log(`Baixado ${baixarDesteRegistro}kg do registro ${registro.id}`);
+        
+        quantidadeRestante -= baixarDesteRegistro;
       }
       
-      // Verificar se o estoque zerou para remover a associação
-      const [estoqueAtualizado] = await connection.query(
-        'SELECT * FROM estoque_animal WHERE id = ?',
-        [assoc.estoque_animal_id]
+      // Atualizar também o total na tabela estoque_animal_tipo
+      await connection.query(
+        'UPDATE estoque_animal_tipo SET peso_total_kg = (SELECT SUM(peso_kg) FROM estoque_animal WHERE parte = ?) WHERE parte = ?',
+        [parte, parte]
       );
-      
-      if (estoqueAtualizado.length > 0 && parseFloat(estoqueAtualizado[0].peso_kg) <= 0) {
-        // Remover associação se o estoque zerou
-        await connection.query(
-          'DELETE FROM produto_estoque_animal WHERE id = ?',
-          [assoc.id]
-        );
-        console.log(`Associação removida devido a estoque zerado: ${assoc.id}`);
-      }
     }
     
     return true;
@@ -71,66 +101,110 @@ async function baixarEstoqueAnimal(connection, produto_id, quantidade_kg) {
 // Função auxiliar para restaurar estoque animal quando uma venda é cancelada
 async function restaurarEstoqueAnimal(connection, produto_id, quantidade_kg) {
   try {
-    // Verificar associações disponíveis para este produto
+    // Verificar associações do produto
     const [associacoes] = await connection.query(`
-      SELECT pea.*, ea.parte
+      SELECT pea.*, eat.parte
       FROM produto_estoque_animal pea
-      JOIN estoque_animal ea ON pea.estoque_animal_id = ea.id
+      JOIN estoque_animal_tipo eat ON pea.estoque_animal_tipo_id = eat.id
       WHERE pea.produto_id = ?
     `, [produto_id]);
     
-    // Se não houver associações, verificar se existem estoques zerados que podem ser restaurados
+    // Se não há associações ativas, procurar pelo tipo de produto para determinar parte
     if (associacoes.length === 0) {
-      // Buscar todos os estoques animais com peso zero
-      const [estoquesZerados] = await connection.query(`
-        SELECT ea.*
-        FROM estoque_animal ea
-        WHERE ea.peso_kg = 0
+      // Assumindo uma distribuição padrão para produtos sem associação
+      // Você pode ajustar isso com base no conhecimento do seu negócio
+      
+      // Buscar o registro mais recente para cada parte
+      const [registrosTraseiro] = await connection.query(`
+        SELECT id FROM estoque_animal 
+        WHERE parte = 'traseiro' 
+        ORDER BY data_entrada DESC LIMIT 1
       `);
       
-      if (estoquesZerados.length === 0) {
-        console.log(`Nenhum estoque animal zerado encontrado para restaurar para o produto ${produto_id}`);
-        return false;
+      const [registrosDianteiro] = await connection.query(`
+        SELECT id FROM estoque_animal 
+        WHERE parte = 'dianteiro' 
+        ORDER BY data_entrada DESC LIMIT 1
+      `);
+      
+      // Restaurar 50% para cada parte, se houver registros disponíveis
+      if (registrosTraseiro.length > 0) {
+        await connection.query(
+          'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
+          [quantidade_kg * 0.5, registrosTraseiro[0].id]
+        );
+        console.log(`Restaurado ${quantidade_kg * 0.5}kg na parte traseiro, registro ${registrosTraseiro[0].id}`);
+        
+        // Atualizar o total
+        await connection.query(
+          'UPDATE estoque_animal_tipo SET peso_total_kg = (SELECT SUM(peso_kg) FROM estoque_animal WHERE parte = "traseiro") WHERE parte = "traseiro"'
+        );
       }
       
-      // Restaurar o primeiro estoque zerado encontrado (abordagem simplificada)
-      // Em um cenário mais complexo, poderia haver lógica para decidir qual estoque restaurar
-      const estoqueParaRestaurar = estoquesZerados[0];
+      if (registrosDianteiro.length > 0) {
+        await connection.query(
+          'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
+          [quantidade_kg * 0.5, registrosDianteiro[0].id]
+        );
+        console.log(`Restaurado ${quantidade_kg * 0.5}kg na parte dianteiro, registro ${registrosDianteiro[0].id}`);
+        
+        // Atualizar o total
+        await connection.query(
+          'UPDATE estoque_animal_tipo SET peso_total_kg = (SELECT SUM(peso_kg) FROM estoque_animal WHERE parte = "dianteiro") WHERE parte = "dianteiro"'
+        );
+      }
       
-      // Restaurar o peso
-      await connection.query(
-        'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
-        [quantidade_kg, estoqueParaRestaurar.id]
-      );
-      
-      // Criar nova associação
-      await connection.query(
-        'INSERT INTO produto_estoque_animal (produto_id, estoque_animal_id, percentual) VALUES (?, ?, 100)',
-        [produto_id, estoqueParaRestaurar.id]
-      );
-      
-      console.log(`Estoque animal ${estoqueParaRestaurar.id} restaurado com ${quantidade_kg}kg para o produto ${produto_id}`);
       return true;
     }
     
-    // Calcular o total de percentual para normalização
+    // Se há associações, restaurar proporcionalmente
     const totalPercentual = associacoes.reduce((total, assoc) => total + parseFloat(assoc.percentual), 0);
     
-    // Restaurar estoque proporcional em cada estoque animal associado
+    // Calcular quanto restaurar para cada parte
+    const partes = {};
+    
     for (const assoc of associacoes) {
-      // Normalizar o percentual caso o total seja diferente de 100%
+      const parte = assoc.parte;
       const percentualNormalizado = (parseFloat(assoc.percentual) / totalPercentual) * 100;
-      
-      // Calcular quantidade a restaurar neste estoque específico
       const quantidadeRestaurar = (quantidade_kg * percentualNormalizado) / 100;
       
-      console.log(`Restaurando ${quantidadeRestaurar}kg (${percentualNormalizado}%) no estoque animal ${assoc.estoque_animal_id} (${assoc.parte})`);
+      if (!partes[parte]) {
+        partes[parte] = 0;
+      }
       
-      // Restaurar o estoque
-      await connection.query(
-        'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
-        [quantidadeRestaurar, assoc.estoque_animal_id]
-      );
+      partes[parte] += quantidadeRestaurar;
+    }
+    
+    // Para cada parte, restaurar no registro mais recente
+    for (const parte in partes) {
+      const quantidadeTotalRestaurar = partes[parte];
+      
+      // Buscar o registro mais recente para esta parte
+      const [registrosRecentes] = await connection.query(`
+        SELECT id 
+        FROM estoque_animal 
+        WHERE parte = ? 
+        ORDER BY data_entrada DESC 
+        LIMIT 1
+      `, [parte]);
+      
+      if (registrosRecentes.length > 0) {
+        // Restaurar no registro mais recente
+        await connection.query(
+          'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
+          [quantidadeTotalRestaurar, registrosRecentes[0].id]
+        );
+        
+        console.log(`Restaurado ${quantidadeTotalRestaurar}kg na parte ${parte}, registro ${registrosRecentes[0].id}`);
+        
+        // Atualizar o total na tabela estoque_animal_tipo
+        await connection.query(
+          'UPDATE estoque_animal_tipo SET peso_total_kg = (SELECT SUM(peso_kg) FROM estoque_animal WHERE parte = ?) WHERE parte = ?',
+          [parte, parte]
+        );
+      } else {
+        console.warn(`Não há registros disponíveis para restaurar na parte ${parte}`);
+      }
     }
     
     return true;
