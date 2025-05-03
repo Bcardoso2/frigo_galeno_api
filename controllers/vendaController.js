@@ -1,5 +1,145 @@
 const { pool } = require('../config/database');
 
+// Função auxiliar para baixar estoque animal
+async function baixarEstoqueAnimal(connection, produto_id, quantidade_kg) {
+  try {
+    // Verificar se o produto está associado a algum estoque animal
+    const [associacoes] = await connection.query(`
+      SELECT pea.*, ea.peso_kg as estoque_atual, ea.parte
+      FROM produto_estoque_animal pea
+      JOIN estoque_animal ea ON pea.estoque_animal_id = ea.id
+      WHERE pea.produto_id = ?
+    `, [produto_id]);
+    
+    if (associacoes.length === 0) {
+      console.log(`Produto ${produto_id} não está associado a nenhum estoque animal`);
+      return false; // Não há associações, continuar normalmente
+    }
+    
+    // Calcular o total de percentual para normalização
+    const totalPercentual = associacoes.reduce((total, assoc) => total + parseFloat(assoc.percentual), 0);
+    
+    // Baixar estoque proporcional em cada estoque animal associado
+    for (const assoc of associacoes) {
+      // Normalizar o percentual caso o total seja diferente de 100%
+      const percentualNormalizado = (parseFloat(assoc.percentual) / totalPercentual) * 100;
+      
+      // Calcular quantidade a baixar deste estoque específico
+      const quantidadeBaixar = (quantidade_kg * percentualNormalizado) / 100;
+      
+      console.log(`Baixando ${quantidadeBaixar}kg (${percentualNormalizado}%) do estoque animal ${assoc.estoque_animal_id} (${assoc.parte})`);
+      
+      // Verificar se tem estoque suficiente
+      if (parseFloat(assoc.estoque_atual) < quantidadeBaixar) {
+        console.warn(`Estoque insuficiente no estoque animal ${assoc.estoque_animal_id}. Disponível: ${assoc.estoque_atual}kg, Necessário: ${quantidadeBaixar}kg`);
+        // Continua a operação, baixando o que tem disponível
+        await connection.query(
+          'UPDATE estoque_animal SET peso_kg = 0 WHERE id = ?',
+          [assoc.estoque_animal_id]
+        );
+      } else {
+        // Baixar a quantidade calculada
+        await connection.query(
+          'UPDATE estoque_animal SET peso_kg = peso_kg - ? WHERE id = ?',
+          [quantidadeBaixar, assoc.estoque_animal_id]
+        );
+      }
+      
+      // Verificar se o estoque zerou para remover a associação
+      const [estoqueAtualizado] = await connection.query(
+        'SELECT * FROM estoque_animal WHERE id = ?',
+        [assoc.estoque_animal_id]
+      );
+      
+      if (estoqueAtualizado.length > 0 && parseFloat(estoqueAtualizado[0].peso_kg) <= 0) {
+        // Remover associação se o estoque zerou
+        await connection.query(
+          'DELETE FROM produto_estoque_animal WHERE id = ?',
+          [assoc.id]
+        );
+        console.log(`Associação removida devido a estoque zerado: ${assoc.id}`);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Erro ao baixar estoque animal:', error);
+    return false; // Erro, mas não impede a venda
+  }
+}
+
+// Função auxiliar para restaurar estoque animal quando uma venda é cancelada
+async function restaurarEstoqueAnimal(connection, produto_id, quantidade_kg) {
+  try {
+    // Verificar associações disponíveis para este produto
+    const [associacoes] = await connection.query(`
+      SELECT pea.*, ea.parte
+      FROM produto_estoque_animal pea
+      JOIN estoque_animal ea ON pea.estoque_animal_id = ea.id
+      WHERE pea.produto_id = ?
+    `, [produto_id]);
+    
+    // Se não houver associações, verificar se existem estoques zerados que podem ser restaurados
+    if (associacoes.length === 0) {
+      // Buscar todos os estoques animais com peso zero
+      const [estoquesZerados] = await connection.query(`
+        SELECT ea.*
+        FROM estoque_animal ea
+        WHERE ea.peso_kg = 0
+      `);
+      
+      if (estoquesZerados.length === 0) {
+        console.log(`Nenhum estoque animal zerado encontrado para restaurar para o produto ${produto_id}`);
+        return false;
+      }
+      
+      // Restaurar o primeiro estoque zerado encontrado (abordagem simplificada)
+      // Em um cenário mais complexo, poderia haver lógica para decidir qual estoque restaurar
+      const estoqueParaRestaurar = estoquesZerados[0];
+      
+      // Restaurar o peso
+      await connection.query(
+        'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
+        [quantidade_kg, estoqueParaRestaurar.id]
+      );
+      
+      // Criar nova associação
+      await connection.query(
+        'INSERT INTO produto_estoque_animal (produto_id, estoque_animal_id, percentual) VALUES (?, ?, 100)',
+        [produto_id, estoqueParaRestaurar.id]
+      );
+      
+      console.log(`Estoque animal ${estoqueParaRestaurar.id} restaurado com ${quantidade_kg}kg para o produto ${produto_id}`);
+      return true;
+    }
+    
+    // Calcular o total de percentual para normalização
+    const totalPercentual = associacoes.reduce((total, assoc) => total + parseFloat(assoc.percentual), 0);
+    
+    // Restaurar estoque proporcional em cada estoque animal associado
+    for (const assoc of associacoes) {
+      // Normalizar o percentual caso o total seja diferente de 100%
+      const percentualNormalizado = (parseFloat(assoc.percentual) / totalPercentual) * 100;
+      
+      // Calcular quantidade a restaurar neste estoque específico
+      const quantidadeRestaurar = (quantidade_kg * percentualNormalizado) / 100;
+      
+      console.log(`Restaurando ${quantidadeRestaurar}kg (${percentualNormalizado}%) no estoque animal ${assoc.estoque_animal_id} (${assoc.parte})`);
+      
+      // Restaurar o estoque
+      await connection.query(
+        'UPDATE estoque_animal SET peso_kg = peso_kg + ? WHERE id = ?',
+        [quantidadeRestaurar, assoc.estoque_animal_id]
+      );
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Erro ao restaurar estoque animal:', error);
+    return false;
+  }
+}
+
 // @desc    Registrar uma venda
 // @route   POST /api/vendas
 // @access  Privado
@@ -108,6 +248,9 @@ const registrarVenda = async (req, res) => {
         'UPDATE estoque SET quantidade_kg = quantidade_kg - ?, data_atualizacao = NOW() WHERE produto_id = ?',
         [quantidadeKg, produtoId]
       );
+
+      // Baixar também do estoque animal, se houver associação
+      await baixarEstoqueAnimal(connection, produtoId, quantidadeKg);
   
       // Commit da transação
       await connection.commit();
@@ -218,6 +361,9 @@ const registrarVendaCompleta = async (req, res) => {
         'UPDATE estoque SET quantidade_kg = quantidade_kg - ?, data_atualizacao = NOW() WHERE produto_id = ?',
         [quantidade_kg, produto_id]
       );
+
+      // Baixar também do estoque animal, se houver associação
+      await baixarEstoqueAnimal(connection, produto_id, quantidade_kg);
     }
     
     // Atualizar valor total da venda
@@ -266,9 +412,6 @@ const registrarVendaCompleta = async (req, res) => {
 // @desc    Listar vendas com filtro de data opcional
 // @route   GET /api/vendas
 // @access  Privado
-// @desc    Listar vendas com filtro de data opcional
-// @route   GET /api/vendas
-// @access  Privado
 const listarVendas = async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
@@ -288,13 +431,13 @@ const listarVendas = async (req, res) => {
     let queryParams = [];
 
     if (data_inicio && data_fim) {
-      whereConditions.push('v.data_hora BETWEEN ? AND ?');
+      whereConditions.push('v.createdAt BETWEEN ? AND ?');
       queryParams.push(new Date(data_inicio), new Date(data_fim));
     } else if (data_inicio) {
-      whereConditions.push('v.data_hora >= ?');
+      whereConditions.push('v.createdAt >= ?');
       queryParams.push(new Date(data_inicio));
     } else if (data_fim) {
-      whereConditions.push('v.data_hora <= ?');
+      whereConditions.push('v.createdAt <= ?');
       queryParams.push(new Date(data_fim));
     }
 
@@ -302,7 +445,7 @@ const listarVendas = async (req, res) => {
       queryString += ' WHERE ' + whereConditions.join(' AND ');
     }
 
-    queryString += ' ORDER BY v.data_hora DESC';
+    queryString += ' ORDER BY v.createdAt DESC';
 
     const [vendas] = await pool.query(queryString, queryParams);
 
@@ -315,25 +458,23 @@ const listarVendas = async (req, res) => {
     console.error('Erro ao listar vendas:', error);
     res.status(500).json({
       success: false,
-      message: 'Erro ao listar vendas',
-      error: error.message
+      message: 'Erro ao listar vendas'
     });
   }
 };
-// @desc    Obter resumo das vendas do dia
-// @route   GET /api/vendas/resumo-dia
-// @access  Privado
+
 // @desc    Obter resumo das vendas do dia
 // @route   GET /api/vendas/resumo-dia
 // @access  Privado
 const getResumoDiario = async (req, res) => {
   try {
-    // Obter a data de hoje no formato YYYY-MM-DD
-    const dataHoje = new Date().toISOString().split('T')[0]; 
+    // Obter a data de hoje no formato compatível com MySQL
+    const hoje = new Date();
+    const dataHoje = hoje.toISOString().split('T')[0]; // Formato YYYY-MM-DD
     
     console.log('Buscando resumo para a data:', dataHoje);
     
-    // Consulta usando as colunas que realmente existem na sua tabela
+    // Consulta principal - usando a estrutura real da tabela
     const [vendas] = await pool.query(`
       SELECT v.*, vi.quantidade_kg, vi.preco_kg, vi.valor_total as item_valor_total,
              p.nome as produto_nome
@@ -474,106 +615,109 @@ const getVenda = async (req, res) => {
       success: false,
       message: 'Erro ao buscar detalhes da venda'
     });
-}
+  }
 };
 
 // @desc    Cancelar uma venda
 // @route   PUT /api/vendas/:id/cancelar
 // @access  Privado
 const cancelarVenda = async (req, res) => {
-const connection = await pool.getConnection();
+  const connection = await pool.getConnection();
 
-try {
-  const { id } = req.params;
-  const { motivo } = req.body;
-  
-  // Iniciar transação
-  await connection.beginTransaction();
-  
-  // Verificar se a venda existe
-  const [vendas] = await connection.query('SELECT * FROM vendas WHERE id = ?', [id]);
-  
-  if (vendas.length === 0) {
-    await connection.rollback();
-    connection.release();
-    return res.status(404).json({
-      success: false,
-      message: 'Venda não encontrada'
-    });
-  }
-  
-  const venda = vendas[0];
-  
-  // Verificar se a venda já foi cancelada
-  if (venda.cancelada) {
-    await connection.rollback();
-    connection.release();
-    return res.status(400).json({
-      success: false,
-      message: 'Venda já cancelada'
-    });
-  }
-  
-  // Buscar itens da venda
-  const [itens] = await connection.query('SELECT * FROM venda_itens WHERE venda_id = ?', [id]);
-  
-  // Restaurar estoque para cada item
-  for (const item of itens) {
+  try {
+    const { id } = req.params;
+    const { motivo } = req.body;
+    
+    // Iniciar transação
+    await connection.beginTransaction();
+    
+    // Verificar se a venda existe
+    const [vendas] = await connection.query('SELECT * FROM vendas WHERE id = ?', [id]);
+    
+    if (vendas.length === 0) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({
+        success: false,
+        message: 'Venda não encontrada'
+      });
+    }
+    
+    const venda = vendas[0];
+    
+    // Verificar se a venda já foi cancelada
+    if (venda.cancelada) {
+      await connection.rollback();
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: 'Venda já cancelada'
+      });
+    }
+    
+    // Buscar itens da venda
+    const [itens] = await connection.query('SELECT * FROM venda_itens WHERE venda_id = ?', [id]);
+    
+    // Restaurar estoque para cada item
+    for (const item of itens) {
+      await connection.query(
+        'UPDATE estoque SET quantidade_kg = quantidade_kg + ?, data_atualizacao = NOW() WHERE produto_id = ?',
+        [item.quantidade_kg, item.produto_id]
+      );
+      
+      // Restaurar também o estoque animal, se houver associação
+      await restaurarEstoqueAnimal(connection, item.produto_id, item.quantidade_kg);
+    }
+    
+    // Marcar venda como cancelada
     await connection.query(
-      'UPDATE estoque SET quantidade_kg = quantidade_kg + ?, data_atualizacao = NOW() WHERE produto_id = ?',
-      [item.quantidade_kg, item.produto_id]
+      'UPDATE vendas SET cancelada = TRUE, motivo_cancelamento = ?, updatedAt = NOW() WHERE id = ?',
+      [motivo || 'Não informado', id]
     );
-  }
-  
-  // Marcar venda como cancelada
-  await connection.query(
-    'UPDATE vendas SET cancelada = TRUE, motivo_cancelamento = ?, updatedAt = NOW() WHERE id = ?',
-    [motivo || 'Não informado', id]
-  );
-  
-  // Commit da transação
-  await connection.commit();
-  connection.release();
-  
-  // Buscar venda atualizada
-  const [vendaAtualizada] = await pool.query(`
-    SELECT v.*, 
-           u.nome as usuario_nome, 
-           vi.quantidade_kg, 
-           vi.preco_kg, 
-           vi.valor_total as item_valor_total,
-           p.nome as produto_nome
-    FROM vendas v
-    JOIN usuarios u ON v.usuario_id = u.id
-    JOIN venda_itens vi ON v.id = vi.venda_id
-    JOIN produtos p ON vi.produto_id = p.id
-    WHERE v.id = ?
-  `, [id]);
-  
-  res.status(200).json({
-    success: true,
-    data: vendaAtualizada[0]
-  });
-} catch (error) {
-  // Garantir rollback em caso de erro
-  if (connection) {
-    await connection.rollback();
+    
+    // Commit da transação
+    await connection.commit();
     connection.release();
+    
+    // Buscar venda atualizada
+    const [vendaAtualizada] = await pool.query(`
+      SELECT v.*, 
+             u.nome as usuario_nome, 
+             vi.quantidade_kg, 
+             vi.preco_kg, 
+             vi.valor_total as item_valor_total,
+             p.nome as produto_nome
+      FROM vendas v
+      JOIN usuarios u ON v.usuario_id = u.id
+      JOIN venda_itens vi ON v.id = vi.venda_id
+      JOIN produtos p ON vi.produto_id = p.id
+      WHERE v.id = ?
+    `, [id]);
+    
+    res.status(200).json({
+      success: true,
+      data: vendaAtualizada[0]
+    });
+  } catch (error) {
+    // Garantir rollback em caso de erro
+    if (connection) {
+      await connection.rollback();
+      connection.release();
+    }
+    console.error('Erro ao cancelar venda:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao cancelar venda'
+    });
   }
-  console.error('Erro ao cancelar venda:', error);
-  res.status(500).json({
-    success: false,
-    message: 'Erro ao cancelar venda'
-  });
-}
 };
 
 // Exportar todos os métodos do controller
 module.exports = {
-registrarVenda,
-registrarVendaCompleta,
-listarVendas,
-getResumoDiario,
-getVenda,
-cancelarVenda
+  registrarVenda,
+  registrarVendaCompleta,
+  listarVendas,
+  getResumoDiario,
+  getVenda,
+  cancelarVenda
 };
