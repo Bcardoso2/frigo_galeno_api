@@ -6,7 +6,7 @@ const { pool } = require('../config/database');
 // @access  Privado/Admin
 exports.associarProdutoEstoque = async (req, res) => {
   try {
-    const { produto_id, estoque_animal_id, percentual = 100 } = req.body;
+    const { produto_id, estoque_animal_tipo_id, percentual = 100 } = req.body;
     
     // Verificar se o produto existe
     const [produtos] = await pool.query(
@@ -21,44 +21,44 @@ exports.associarProdutoEstoque = async (req, res) => {
       });
     }
     
-    // Verificar se o estoque animal existe
-    const [estoqueAnimal] = await pool.query(
-      'SELECT * FROM estoque_animal WHERE id = ?', 
-      [estoque_animal_id]
+    // Verificar se o tipo de estoque animal existe
+    const [estoqueAnimalTipo] = await pool.query(
+      'SELECT * FROM estoque_animal_tipo WHERE id = ?', 
+      [estoque_animal_tipo_id]
     );
     
-    if (estoqueAnimal.length === 0) {
+    if (estoqueAnimalTipo.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Estoque animal não encontrado'
+        message: 'Tipo de estoque animal não encontrado'
       });
     }
     
     // Verificar se já existe essa associação
     const [associacaoExistente] = await pool.query(
-      'SELECT * FROM produto_estoque_animal WHERE produto_id = ? AND estoque_animal_id = ?',
-      [produto_id, estoque_animal_id]
+      'SELECT * FROM produto_estoque_animal WHERE produto_id = ? AND estoque_animal_tipo_id = ?',
+      [produto_id, estoque_animal_tipo_id]
     );
     
     if (associacaoExistente.length > 0) {
       // Atualizar o percentual da associação existente
       await pool.query(
-        'UPDATE produto_estoque_animal SET percentual = ? WHERE produto_id = ? AND estoque_animal_id = ?',
-        [percentual, produto_id, estoque_animal_id]
+        'UPDATE produto_estoque_animal SET percentual = ? WHERE produto_id = ? AND estoque_animal_tipo_id = ?',
+        [percentual, produto_id, estoque_animal_tipo_id]
       );
     } else {
       // Criar nova associação
       await pool.query(
-        'INSERT INTO produto_estoque_animal (produto_id, estoque_animal_id, percentual) VALUES (?, ?, ?)',
-        [produto_id, estoque_animal_id, percentual]
+        'INSERT INTO produto_estoque_animal (produto_id, estoque_animal_tipo_id, percentual) VALUES (?, ?, ?)',
+        [produto_id, estoque_animal_tipo_id, percentual]
       );
     }
     
     // Buscar todas as associações do produto
     const [associacoes] = await pool.query(`
-      SELECT pea.*, ea.parte, ea.peso_kg, ea.data_entrada, ea.fornecedor
+      SELECT pea.*, eat.parte, eat.peso_total_kg
       FROM produto_estoque_animal pea
-      JOIN estoque_animal ea ON pea.estoque_animal_id = ea.id
+      JOIN estoque_animal_tipo eat ON pea.estoque_animal_tipo_id = eat.id
       WHERE pea.produto_id = ?
       ORDER BY pea.percentual DESC
     `, [produto_id]);
@@ -124,9 +124,9 @@ exports.listarAssociacoesProduto = async (req, res) => {
     const { produtoId } = req.params;
     
     const [associacoes] = await pool.query(`
-      SELECT pea.*, ea.parte, ea.peso_kg, ea.data_entrada, ea.fornecedor
+      SELECT pea.*, eat.parte, eat.peso_total_kg
       FROM produto_estoque_animal pea
-      JOIN estoque_animal ea ON pea.estoque_animal_id = ea.id
+      JOIN estoque_animal_tipo eat ON pea.estoque_animal_tipo_id = eat.id
       WHERE pea.produto_id = ?
       ORDER BY pea.percentual DESC
     `, [produtoId]);
