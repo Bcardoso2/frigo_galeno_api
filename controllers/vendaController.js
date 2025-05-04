@@ -702,6 +702,56 @@ const getVenda = async (req, res) => {
   }
 };
 
+const getRelatorioVendas = async (req, res) => {
+  try {
+    const { data_inicio, data_fim } = req.query;
+    
+    let queryString = `
+      SELECT v.*, 
+             u.nome as usuario_nome, 
+             vi.quantidade_kg, 
+             vi.preco_kg, 
+             vi.valor_total as item_valor_total,
+             p.nome as produto_nome
+      FROM vendas v
+      JOIN usuarios u ON v.usuario_id = u.id
+      JOIN venda_itens vi ON v.id = vi.venda_id
+      JOIN produtos p ON vi.produto_id = p.id
+      WHERE v.finalizada = 1
+    `;
+    
+    let queryParams = [];
+
+    if (data_inicio && data_fim) {
+      queryString += ` AND DATE(v.data_hora) BETWEEN ? AND ?`;
+      queryParams.push(data_inicio, data_fim);
+    } else if (data_inicio) {
+      queryString += ` AND DATE(v.data_hora) >= ?`;
+      queryParams.push(data_inicio);
+    } else if (data_fim) {
+      queryString += ` AND DATE(v.data_hora) <= ?`;
+      queryParams.push(data_fim);
+    }
+
+    queryString += ` ORDER BY v.data_hora DESC`;
+
+    const [vendas] = await pool.query(queryString, queryParams);
+
+    res.status(200).json({
+      success: true,
+      count: vendas.length,
+      data: vendas
+    });
+  } catch (error) {
+    console.error('Erro ao gerar relatório de vendas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao gerar relatório de vendas',
+      error: error.message
+    });
+  }
+};
+
 // @desc    Cancelar uma venda
 // @route   PUT /api/vendas/:id/cancelar
 // @access  Privado
