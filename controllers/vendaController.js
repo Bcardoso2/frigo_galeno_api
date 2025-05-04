@@ -562,32 +562,6 @@ const getResumoDiario = async (req, res) => {
       WHERE DATE(v.data_hora) = ? AND v.finalizada = 1
     `, [dataFormatada]);
     
-    // Resto do código permanece igual...
-    
-    res.status(200).json({
-      success: true,
-      data: {
-        data: dataFormatada,
-        totalVendas,
-        totalValor,
-        totalQuantidade,
-        ticketMedio,
-        valorMedioKg,
-        porFormaPagamento,
-        topProdutos
-      }
-    });
-  } catch (error) {
-    console.error('Erro detalhado ao buscar resumo diário:', error);
-    
-    res.status(500).json({
-      success: false,
-      message: 'Erro ao buscar resumo diário',
-      error: error.message
-    });
-  }
-};
-    
     // Calcular totais
     const totalVendas = vendas.length;
     const totalValor = vendas.reduce((acc, venda) => {
@@ -625,9 +599,9 @@ const getResumoDiario = async (req, res) => {
     const [pagamentos] = await pool.query(`
       SELECT forma_pagamento, SUM(valor_total) as total
       FROM vendas
-      WHERE DATE(data_hora) = ? AND finalizada = 1
+      WHERE DATE(v.data_hora) = ? AND finalizada = 1
       GROUP BY forma_pagamento
-    `, [dataHoje]);
+    `, [dataFormatada]);
     
     const porFormaPagamento = pagamentos.reduce((acc, pagamento) => {
       acc[pagamento.forma_pagamento] = parseFloat(pagamento.total || 0);
@@ -642,7 +616,7 @@ const getResumoDiario = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        data: dataHoje,
+        data: dataFormatada,
         totalVendas,
         totalValor,
         totalQuantidade,
