@@ -9,5 +9,6 @@ router.get('/', vendaController.listarVendas);
 router.get('/resumo-dia', vendaController.getResumoDiario);
 router.get('/:id', vendaController.getVenda);
 router.put('/:id/cancelar', vendaController.cancelarVenda);
+router.get('/relatorio', vendaController.getRelatorioVendas);
 
 module.exports = router;
