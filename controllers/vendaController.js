@@ -542,13 +542,16 @@ const listarVendas = async (req, res) => {
 // @access  Privado
 const getResumoDiario = async (req, res) => {
   try {
-    // Obter a data de hoje no formato compatível com MySQL
-    const hoje = new Date();
-    const dataHoje = hoje.toISOString().split('T')[0]; // Formato YYYY-MM-DD
+    // Permitir data como parâmetro opcional, padrão para hoje
+    const { data } = req.query;
     
-    console.log('Buscando resumo para a data:', dataHoje);
+    // Obter a data solicitada ou usar hoje como padrão
+    const dataRequisitada = data ? new Date(data) : new Date();
+    const dataFormatada = dataRequisitada.toISOString().split('T')[0]; // Formato YYYY-MM-DD
     
-    // Consulta principal - usando a estrutura real da tabela
+    console.log('Buscando resumo para a data:', dataFormatada);
+    
+    // Consulta principal - usando a data solicitada
     const [vendas] = await pool.query(`
       SELECT v.*, vi.quantidade_kg, vi.preco_kg, vi.valor_total as item_valor_total,
              p.nome as produto_nome
@@ -556,26 +559,33 @@ const getResumoDiario = async (req, res) => {
       JOIN venda_itens vi ON v.id = vi.venda_id
       JOIN produtos p ON vi.produto_id = p.id
       WHERE DATE(v.data_hora) = ? AND v.finalizada = 1
-    `, [dataHoje]);
+    `, [dataFormatada]);
     
-    console.log(`Encontradas ${vendas.length} vendas para hoje`);
+    // Resto do código permanece igual...
     
-    // Caso não haja vendas hoje
-    if (vendas.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          data: dataHoje,
-          totalVendas: 0,
-          totalValor: 0,
-          totalQuantidade: 0,
-          ticketMedio: 0,
-          valorMedioKg: 0,
-          porFormaPagamento: {},
-          topProdutos: []
-        }
-      });
-    }
+    res.status(200).json({
+      success: true,
+      data: {
+        data: dataFormatada,
+        totalVendas,
+        totalValor,
+        totalQuantidade,
+        ticketMedio,
+        valorMedioKg,
+        porFormaPagamento,
+        topProdutos
+      }
+    });
+  } catch (error) {
+    console.error('Erro detalhado ao buscar resumo diário:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar resumo diário',
+      error: error.message
+    });
+  }
+};
     
     // Calcular totais
     const totalVendas = vendas.length;
