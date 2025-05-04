@@ -505,21 +505,22 @@ const listarVendas = async (req, res) => {
     let queryParams = [];
 
     if (data_inicio && data_fim) {
-      whereConditions.push('v.createdAt BETWEEN ? AND ?');
-      queryParams.push(new Date(data_inicio), new Date(data_fim));
+      whereConditions.push('DATE(v.data_hora) BETWEEN ? AND ?');
+      queryParams.push(data_inicio, data_fim);
     } else if (data_inicio) {
-      whereConditions.push('v.createdAt >= ?');
-      queryParams.push(new Date(data_inicio));
+      whereConditions.push('DATE(v.data_hora) >= ?');
+      queryParams.push(data_inicio);
     } else if (data_fim) {
-      whereConditions.push('v.createdAt <= ?');
-      queryParams.push(new Date(data_fim));
+      whereConditions.push('DATE(v.data_hora) <= ?');
+      queryParams.push(data_fim);
     }
 
     if (whereConditions.length > 0) {
       queryString += ' WHERE ' + whereConditions.join(' AND ');
     }
 
-    queryString += ' ORDER BY v.createdAt DESC';
+    // MUDANÇA AQUI - Usar data_hora em vez de createdAt
+    queryString += ' ORDER BY v.data_hora DESC';
 
     const [vendas] = await pool.query(queryString, queryParams);
 
