@@ -599,7 +599,7 @@ const getResumoDiario = async (req, res) => {
     const [pagamentos] = await pool.query(`
       SELECT forma_pagamento, SUM(valor_total) as total
       FROM vendas
-      WHERE DATE(v.data_hora) = ? AND finalizada = 1
+      WHERE DATE(data_hora) = ? AND finalizada = 1
       GROUP BY forma_pagamento
     `, [dataFormatada]);
     
@@ -677,6 +677,9 @@ const getVenda = async (req, res) => {
   }
 };
 
+// @desc    Obter relatório de vendas com filtro de data
+// @route   GET /api/vendas/relatorio
+// @access  Privado
 const getRelatorioVendas = async (req, res) => {
   try {
     const { data_inicio, data_fim } = req.query;
@@ -774,7 +777,7 @@ const cancelarVenda = async (req, res) => {
         [item.quantidade_kg, item.produto_id]
       );
       
-      // Restaurar também o estoque animal, se houver associação
+// Restaurar também o estoque animal, se houver associação
       await restaurarEstoqueAnimal(connection, item.produto_id, item.quantidade_kg);
     }
     
@@ -828,5 +831,6 @@ module.exports = {
   listarVendas,
   getResumoDiario,
   getVenda,
+  getRelatorioVendas,  // Adicionando a função que faltava
   cancelarVenda
 };
